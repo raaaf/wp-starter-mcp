@@ -39,17 +39,23 @@ final class Lifecycle
 
     public static function deactivate(bool $networkWide = false): void
     {
+        self::forEachSite($networkWide, [self::class, 'deactivateSite']);
+    }
+
+    /** Runs a callback for the current site, or for every site of a network. */
+    public static function forEachSite(bool $networkWide, callable $callback): void
+    {
         if ($networkWide && is_multisite()) {
             foreach (get_sites(['fields' => 'ids', 'number' => 0]) as $siteId) {
                 switch_to_blog((int) $siteId);
-                self::deactivateSite();
+                $callback();
                 restore_current_blog();
             }
 
             return;
         }
 
-        self::deactivateSite();
+        $callback();
     }
 
     /** Revokes every token, switches the feature off and clears the cron for the current site. */
@@ -58,5 +64,6 @@ final class Lifecycle
         self::revokeAll();
         update_option(Config::OPTION_ENABLED, '0');
         wp_clear_scheduled_hook(Config::PRUNE_HOOK);
+        wp_clear_scheduled_hook(Updates::MANIFEST_HOOK);
     }
 }

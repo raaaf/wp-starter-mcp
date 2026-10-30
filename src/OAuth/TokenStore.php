@@ -111,7 +111,60 @@ final class TokenStore
             return null;
         }
 
+        $this->touch($row);
+
         return $row;
+    }
+
+    /**
+     * Last use for the connection list, at most once a minute per token.
+     *
+     * @param array<string, mixed> $row
+     */
+    private function touch(array $row): void
+    {
+        global $wpdb;
+
+        $now = $this->now();
+
+        if ($row['last_used_at'] === null || $now - (int) $row['last_used_at'] >= 60) {
+            $wpdb->update(Schema::tokensTable(), ['last_used_at' => $now], ['id' => (int) $row['id']]);
+        }
+    }
+
+    /**
+     * Live connections: families with an unused, unrevoked, unexpired refresh token.
+     *
+     * @return list<array{family_id: string, user_id: int, client_host: string, created_at: int, last_used_at: int}>
+     */
+    public function connections(?int $userId = null): array
+    {
+        global $wpdb;
+
+        /** @var list<array<string, mixed>> $rows */
+        $rows = $wpdb->get_results('SELECT * FROM ' . Schema::tokensTable() . ' WHERE revoked_at IS NULL', ARRAY_A);
+        $families = [];
+
+        foreach ($rows as $row) {
+            if ($userId !== null && (int) $row['user_id'] !== $userId) {
+                continue;
+            }
+            $family = (string) $row['family_id'];
+            $families[$family] ??= ['family_id' => $family, 'user_id' => (int) $row['user_id'], 'client_host' => ClientMap::host((string) $row['client_id']), 'created_at' => (int) $row['created_at'], 'last_used_at' => 0, 'live' => false];
+            $families[$family]['created_at'] = min($families[$family]['created_at'], (int) $row['created_at']);
+            $families[$family]['last_used_at'] = max($families[$family]['last_used_at'], (int) ($row['last_used_at'] ?? 0));
+            if ($row['type'] === 'refresh' && $row['used_at'] === null && (int) $row['expires_at'] > $this->now()) {
+                $families[$family]['live'] = true;
+            }
+        }
+
+        $live = array_filter($families, static fn (array $f): bool => $f['live']);
+        usort($live, static fn (array $a, array $b): int => $b['created_at'] <=> $a['created_at']);
+
+        return array_map(static fn (array $f): array => [
+            'family_id' => $f['family_id'], 'user_id' => $f['user_id'], 'client_host' => $f['client_host'],
+            'created_at' => $f['created_at'], 'last_used_at' => $f['last_used_at'],
+        ], $live);
     }
 
     public function revokeFamily(string $familyId): void
@@ -174,6 +227,12 @@ final class TokenStore
     /** The MCP adapter keeps sessions in user meta, per site suffix on multisite. */
     private static function forgetUserSessions(int $userId): void
     {
+        delete_user_meta($userId, self::sessionMetaKey());
+    }
+
+    /** User meta key of the adapter's sessions, with the site suffix on multisite. */
+    public static function sessionMetaKey(): string
+    {
         $key = 'mcp_adapter_sessions';
 
         if (is_multisite()) {
@@ -181,7 +240,7 @@ final class TokenStore
             $key = $blog >= 1 ? $key . '_' . $blog : $key;
         }
 
-        delete_user_meta($userId, $key);
+        return $key;
     }
 
     public static function make(): self

@@ -9,16 +9,21 @@ use WpStarterMcp\OAuth\Discovery;
 use WpStarterMcp\OAuth\Token;
 
 /**
- * Boots the plugin. While the feature is off only Updates is hooked, so the update channel
- * keeps working and no endpoint exists.
+ * Boots the plugin. While the feature is off, or below the minimum version, no endpoint exists.
  */
 final class McpPlugin
 {
     public static function boot(): void
     {
+        // Hooked while off: the update channel, the privacy tools for data that outlives the
+        // switch, the setup page (the switch lives there) and the pinned replace snapshots.
         Updates::register();
+        Privacy::register();
+        SetupPage::register();
+        ReplaceOriginal::register();
 
-        if (!Config::isEnabled()) {
+        // Below the published minimum version nothing else is registered: endpoints 404.
+        if (!Config::isEnabled() || Updates::belowMinimum()) {
             return;
         }
 
