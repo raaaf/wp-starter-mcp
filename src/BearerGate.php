@@ -16,6 +16,9 @@ final class BearerGate
     /** user_can() inside token validation can reach determine_current_user again (e.g. a map_meta_cap filter calling wp_get_current_user). */
     private static bool $resolving = false;
 
+    /** @var array<string, mixed>|null the token row that authenticated this request */
+    private static ?array $token = null;
+
     public static function register(): void
     {
         add_filter('determine_current_user', [self::class, 'determineUser'], 30);
@@ -44,7 +47,7 @@ final class BearerGate
      */
     public static function determineUser(mixed $user): mixed
     {
-        if (!did_action('after_setup_theme') || $user) {
+        if (!did_action('after_setup_theme') || $user || Contract::current() === null) {
             return $user;
         }
 
@@ -64,14 +67,20 @@ final class BearerGate
             self::$resolving = false;
         }
 
-        return $row === null ? $user : (int) $row['user_id'];
+        if ($row === null) {
+            return $user;
+        }
+
+        self::$token = $row;
+
+        return (int) $row['user_id'];
     }
 
     /** Authenticate again, in case an early caller cached user 0. */
     public static function authenticationErrors(mixed $result): mixed
     {
         $token = self::bearer();
-        if ($result !== null || $token === null || !self::isMcpPath()) {
+        if ($result !== null || $token === null || !self::isMcpPath() || Contract::current() === null) {
             return $result;
         }
 
@@ -80,9 +89,36 @@ final class BearerGate
             return new \WP_Error('wpsmcp_invalid_token', 'Invalid or expired token.', ['status' => 401]);
         }
 
+        self::$token = $row;
         wp_set_current_user((int) $row['user_id']);
 
         return $result;
+    }
+
+    /**
+     * Whether the caller may use a scope. A token carries its granted scopes; a caller without
+     * a token (application password, cookie) acts with the user's own capabilities.
+     */
+    public static function allowsScope(string $scope): bool
+    {
+        return self::$token === null || in_array($scope, explode(' ', (string) self::$token['scope']), true);
+    }
+
+    /** Stable identifier of the connection, for per-connection limits. */
+    public static function connectionKey(int $userId): string
+    {
+        return self::$token === null ? 'user:' . $userId : 'family:' . (string) self::$token['family_id'];
+    }
+
+    public static function clientHost(): string
+    {
+        return self::$token === null ? '' : OAuth\ClientMap::host((string) self::$token['client_id']);
+    }
+
+    /** @internal for tests */
+    public static function forgetToken(): void
+    {
+        self::$token = null;
     }
 
     public static function preDispatch(mixed $result, mixed $server, \WP_REST_Request $request): mixed

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace WpStarterMcp\OAuth;
 
 use WpStarterMcp\Config;
+use WpStarterMcp\Contract;
 
 /**
  * Well-known documents, answered on parse_request. Nothing is rate limited per address:
@@ -22,6 +23,10 @@ final class Discovery
 
     public static function handle(): void
     {
+        if (Contract::current() === null) {
+            return;
+        }
+
         $uri = isset($_SERVER['REQUEST_URI']) && is_string($_SERVER['REQUEST_URI']) ? $_SERVER['REQUEST_URI'] : '';
         $document = self::match((string) parse_url($uri, PHP_URL_PATH));
 

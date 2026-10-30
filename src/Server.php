@@ -6,7 +6,7 @@ namespace WpStarterMcp;
 
 /**
  * Registers this plugin's own MCP server on the adapter with an explicit ability list, so
- * other plugins' abilities never appear. The list is empty until the abilities step.
+ * other plugins' abilities never appear. Not registered without a usable theme contract.
  */
 final class Server
 {
@@ -19,7 +19,7 @@ final class Server
 
     public static function create(object $adapter): void
     {
-        if (!method_exists($adapter, 'create_server')) {
+        if (!method_exists($adapter, 'create_server') || Contract::current() === null) {
             return;
         }
 
@@ -33,7 +33,7 @@ final class Server
             ['WP\\MCP\\Transport\\HttpTransport'],
             null,
             null,
-            [],
+            Abilities::NAMES,
             [],
             [],
             static fn (): bool => current_user_can('edit_pages')
