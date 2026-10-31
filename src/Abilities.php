@@ -101,7 +101,7 @@ final class Abilities
                 'write' => true,
             ],
             'update-draft-page' => [
-                'description' => 'Replace the sections of an existing DRAFT page (read it with get-page first and send all sections back). Live pages are refused: use create-draft-copy for those.' . self::HANDOVER,
+                'description' => 'Replace ALL sections of an existing DRAFT page (read it with get-page first and send every section back; an empty list is refused). The previous state is kept as a revision. Live pages are refused: use create-draft-copy for those.' . self::HANDOVER,
                 'scope' => self::DRAFT,
                 'input' => ['type' => 'object', 'properties' => ['id' => $id, 'sections' => $sections, 'title' => ['type' => 'string']], 'required' => ['id', 'sections'], 'additionalProperties' => false],
                 'callback' => [self::class, 'updateDraftPage'],
@@ -133,7 +133,7 @@ final class Abilities
                     $definition['target'] ?? null,
                     $definition['cap'] ?? 'edit_pages'
                 ),
-                'meta' => ['annotations' => ['readonly' => !$write, 'destructive' => false, 'idempotent' => $name === 'update-draft-page']],
+                'meta' => ['annotations' => ['readonly' => !$write, 'destructive' => $name === 'update-draft-page', 'idempotent' => $name === 'update-draft-page']],
             ]);
         }
     }
@@ -354,9 +354,18 @@ final class Abilities
             return new \WP_Error('wpsmcp_not_draft', 'Only drafts can be updated. Use create-draft-copy to work on a copy of a live page.');
         }
 
+        // Everything is replaced: an empty list would wipe the page, so it is never meant.
+        if (!is_array($input['sections'] ?? null) || $input['sections'] === []) {
+            return new \WP_Error('wpsmcp_empty_sections', 'sections is empty, which would delete every section of the draft. Read the page with get-page and send all sections back, with your changes.');
+        }
+
         $checked = self::check($input, self::content()->keepable($id));
         if (is_wp_error($checked)) {
             return $checked;
+        }
+
+        if (ReplaceOriginal::snapshot($id, self::content(), [], false) === 0) {
+            return new \WP_Error('wpsmcp_snapshot', 'The previous state of the draft could not be saved, so nothing was changed.');
         }
 
         self::write($id, $checked);

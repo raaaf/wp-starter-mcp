@@ -180,6 +180,13 @@ final class Token
         $access = $this->store->issue('access', Config::ACCESS_TTL, $fields);
         $refresh = $this->store->issue('refresh', Config::REFRESH_TTL, $fields);
 
+        // A revocation between the checks and the inserts has not seen the new rows: close them too.
+        if ($this->store->familyRevoked($family)) {
+            $this->store->revokeFamily($family);
+
+            return $this->error('invalid_grant');
+        }
+
         return [
             'status' => 200,
             'body' => [

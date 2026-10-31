@@ -250,6 +250,105 @@ final class SectionValidatorTest extends WpTestCase
         $this->assertStringNotContainsString('[gallery', SectionValidator::cleanHtml('[gal[gallery]lery ids=1]'));
     }
 
+    /** @return array<string, array{string}> */
+    public static function shortcodePayloads(): array
+    {
+        return [
+            'nested twice' => ['[gal[a[x]a]lery ids=1]'],
+            'joined by removal' => ['[[b]gallery ids=1]'],
+            'nested deeper' => ['[ga[l[le[r]r]y]y ids=1]'],
+            'slash after name' => ['[contact-form-7/ id="9"]'],
+            'self closing' => ['[gallery/]'],
+            'equals syntax' => ['[gallery=1]'],
+            'dot after name' => ['[gallery.x ids=1]'],
+            'uppercase' => ['[GALLERY ids=1] [Contact-Form-7 id="9"]'],
+            'closing tag' => ['[/gallery]'],
+            'escaped' => ['[[gallery ids=1]]'],
+            'icon lookalike' => ['[icon-x ids=1] [icons]'],
+            'newline' => ["[gallery\nids=1]"],
+        ];
+    }
+
+    #[DataProvider('shortcodePayloads')]
+    public function testNoShortcodeSurvivesInRichText(string $payload): void
+    {
+        $clean = SectionValidator::cleanHtml('a ' . $payload . ' b');
+
+        $this->assertDoesNotMatchRegularExpression('/\[\/?(?!icon(?![\w-]))[a-z_]/i', $clean);
+    }
+
+    #[DataProvider('shortcodePayloads')]
+    public function testNoShortcodeSurvivesInPlainText(string $payload): void
+    {
+        $result = $this->hero(['badge' => 'a ' . $payload . ' b']);
+
+        $this->assertDoesNotMatchRegularExpression('/\[\/?(?!icon(?![\w-]))[a-z_]/i', (string) ($result['rows'][0]['badge'] ?? ''));
+    }
+
+    public function testIconShortcodeSurvivesWithSlashAndAttributes(): void
+    {
+        $this->assertSame('x [icon name="star"/] [/icon] [icon]', SectionValidator::cleanHtml('x [icon name="star"/] [/icon] [icon]'));
+    }
+
+    /** @return array<string, array{string}> */
+    public static function foreignMedia(): array
+    {
+        return [
+            'image elsewhere' => ['<p><img src="https://evil.example/a.png"></p>'],
+            'scheme relative' => ['<img src="//evil.example/a.png">'],
+            'http host lookalike' => ['<img src="https://example.test.evil.example/wp-content/uploads/a.png">'],
+            'outside uploads' => ['<img src="https://example.test/other/a.png">'],
+            'uploads traversal' => ['<img src="https://example.test/wp-content/uploads/../../a.png">'],
+            'userinfo' => ['<img src="https://example.test/wp-content/uploads/@evil.example/a.png">'],
+            'srcset candidate' => ['<img src="https://example.test/wp-content/uploads/a.png" srcset="https://example.test/wp-content/uploads/a.png 1x, https://evil.example/b.png 2x">'],
+            'video' => ['<video src="https://evil.example/a.mp4" controls></video>'],
+            'poster' => ['<video src="https://example.test/wp-content/uploads/a.mp4" poster="https://evil.example/p.png"></video>'],
+            'audio' => ['<audio src="https://evil.example/a.mp3"></audio>'],
+            'encoded entities' => ['<img src="https&#58;//evil.example/a.png">'],
+        ];
+    }
+
+    #[DataProvider('foreignMedia')]
+    public function testRichTextRefusesMediaFromOtherHosts(string $html): void
+    {
+        $result = $this->hero(['copy' => $html]);
+
+        $this->assertNotSame([], $result['errors']);
+        $this->assertSame([], $result['rows']);
+    }
+
+    public function testRichTextKeepsMediaFromThisSitesUploads(): void
+    {
+        $html = '<img src="https://example.test/wp-content/uploads/2026/10/a.png" srcset="https://example.test/wp-content/uploads/2026/10/a-2x.png 2x"><video src="/wp-content/uploads/a.mp4"></video><a href="https://other.example/x">x</a>';
+
+        $this->assertSame([], $this->hero(['copy' => $html])['errors']);
+    }
+
+    /** @return array<string, array{string}> */
+    public static function cssUrls(): array
+    {
+        return [
+            'url' => ['<p style="background:url(https://evil.example/t.png)">x</p>'],
+            'uppercase and space' => ['<p style="background: URL (\'https://evil.example/t.png\')">x</p>'],
+            'entities' => ['<p style="background:&#117;rl(https://evil.example/t.png)">x</p>'],
+            'image-set' => ['<p style="background-image:image-set(\'https://evil.example/t.png\' 1x)">x</p>'],
+            'css escape' => ['<p style="background:\\75rl(https://evil.example/t.png)">x</p>'],
+        ];
+    }
+
+    #[DataProvider('cssUrls')]
+    public function testRichTextRefusesCssUrl(string $html): void
+    {
+        $result = $this->hero(['copy' => $html]);
+
+        $this->assertNotSame([], $result['errors']);
+    }
+
+    public function testRichTextKeepsPlainStyles(): void
+    {
+        $this->assertSame([], $this->hero(['copy' => '<p style="text-align:center">x</p>'])['errors']);
+    }
+
     public function testKeepRowIsCopiedFromTheStoredPage(): void
     {
         $stored = ['acf_fc_layout' => 'newsletter', 'action' => 'https://x.example'];

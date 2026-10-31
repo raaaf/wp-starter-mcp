@@ -24,7 +24,9 @@ final class ReplaceOriginalTest extends WpTestCase
 
     private function nonce(string $modified = self::MODIFIED): string
     {
-        return 'nonce-' . ReplaceOriginal::nonceAction(11, $modified);
+        $plan = ReplaceOriginal::plan(11);
+
+        return 'nonce-' . ReplaceOriginal::nonceAction(11, $modified, is_array($plan) ? $plan['digest'] : '');
     }
 
     public function testPlanListsRemovedSectionsAndNewHosts(): void
@@ -35,6 +37,53 @@ final class ReplaceOriginalTest extends WpTestCase
         $this->assertSame(['team'], $plan['removed']);
         $this->assertSame(['new.example'], $plan['new_hosts']);
         $this->assertFalse($plan['changed']);
+    }
+
+    public function testNewHostsIncludeSchemeRelativeAndDisguisedLinks(): void
+    {
+        \WpState::$fields[11] = [['acf_fc_layout' => 'note', 'text' => '<a href="//cdn.evil.example/x">a</a> <a href="&#x2F;&#x2F;ent.example/y">b</a> <a href="/\\back.example">c</a> <a href="HTTPS:\\\\win.example">d</a> https://new.example/a//path.example/b']];
+
+        $plan = ReplaceOriginal::plan(11);
+
+        $this->assertIsArray($plan);
+        $this->assertEqualsCanonicalizing(['cdn.evil.example', 'ent.example', 'back.example', 'win.example', 'new.example'], $plan['new_hosts']);
+    }
+
+    public function testDoubleSlashInsideTextOrPathIsNoHost(): void
+    {
+        \WpState::$fields[11] = [['acf_fc_layout' => 'note', 'text' => 'and//or, see /files//x and a.b//c']];
+
+        $plan = ReplaceOriginal::plan(11);
+
+        $this->assertIsArray($plan);
+        $this->assertSame([], $plan['new_hosts']);
+    }
+
+    public function testOwnSchemeRelativeLinkIsNoNewHost(): void
+    {
+        \WpState::$fields[11] = [['acf_fc_layout' => 'note', 'text' => '<a href="//example.test/x">a</a>']];
+
+        $plan = ReplaceOriginal::plan(11);
+
+        $this->assertIsArray($plan);
+        $this->assertSame([], $plan['new_hosts']);
+    }
+
+    public function testNonceFromBeforeAnEditOfTheCopyIsRefused(): void
+    {
+        $nonce = $this->nonce();
+        \WpState::$fields[11][1]['text'] = 'see https://evil.example/swapped';
+
+        $this->assertSame('nonce', ReplaceOriginal::execute(11, $nonce));
+        $this->assertSame('old', \WpState::$posts[10]->post_content);
+    }
+
+    public function testNonceFromBeforeATitleChangeOfTheCopyIsRefused(): void
+    {
+        $nonce = $this->nonce();
+        \WpState::$posts[11]->post_title = 'Something else';
+
+        $this->assertSame('nonce', ReplaceOriginal::execute(11, $nonce));
     }
 
     public function testChangedOriginalIsFlagged(): void

@@ -32,6 +32,15 @@ final class TokenStoreTest extends WpTestCase
         $this->assertFalse($this->store()->consume($id));
     }
 
+    public function testRevokedRowCannotBeConsumed(): void
+    {
+        $token = $this->store()->issue('code', 60, $this->fields());
+        $id = (int) $this->store()->find('code', $token)['id'];
+        $this->store()->revokeFamily('f1');
+
+        $this->assertFalse($this->store()->consume($id));
+    }
+
     public function testExpiredAccessTokenIsRefused(): void
     {
         $this->allowUser(3);

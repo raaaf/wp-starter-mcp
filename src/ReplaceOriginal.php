@@ -28,9 +28,9 @@ final class ReplaceOriginal
         add_action('before_delete_post', [self::class, 'unpin']);
     }
 
-    public static function nonceAction(int $copyId, string $modified): string
+    public static function nonceAction(int $copyId, string $modified, string $digest): string
     {
-        return 'wpsmcp_replace_' . $copyId . '_' . $modified;
+        return 'wpsmcp_replace_' . $copyId . '_' . $modified . '_' . $digest;
     }
 
     private static function allowed(int $originalId, int $copyId): bool
@@ -43,7 +43,7 @@ final class ReplaceOriginal
     /**
      * What replacing would do, or the reason it cannot.
      *
-     * @return array{copy: int, original: int, title: string, live_url: string, preview_url: string, removed: list<string>, new_hosts: list<string>, changed: bool, modified: string}|string
+     * @return array{copy: int, original: int, title: string, live_url: string, preview_url: string, removed: list<string>, new_hosts: list<string>, changed: bool, modified: string, digest: string}|string
      */
     public static function plan(int $copyId): array|string
     {
@@ -82,6 +82,7 @@ final class ReplaceOriginal
             'new_hosts' => array_values(array_diff(self::hosts($after), self::hosts($before), [self::ownHost()])),
             'changed' => (string) $original->post_modified_gmt !== (string) get_post_meta($copyId, '_wpsmcp_copy_modified_gmt', true),
             'modified' => (string) $original->post_modified_gmt,
+            'digest' => hash('sha256', (string) wp_json_encode([(string) $copy->post_title, $after])),
         ];
     }
 
@@ -95,9 +96,9 @@ final class ReplaceOriginal
             return $plan;
         }
 
-        // The nonce carries the original's modified time seen on the confirmation page, so an
-        // edit of the original in between invalidates it.
-        if (!wp_verify_nonce($nonce, self::nonceAction($copyId, $plan['modified']))) {
+        // The nonce carries the original's modified time and a hash of the copy's title and rows
+        // as seen on the confirmation page, so an edit of either in between invalidates it.
+        if (!wp_verify_nonce($nonce, self::nonceAction($copyId, $plan['modified'], $plan['digest']))) {
             return 'nonce';
         }
 
@@ -137,8 +138,13 @@ final class ReplaceOriginal
         return ['original' => $plan['original'], 'revision' => $revision];
     }
 
-    /** @param list<string> $metaKeys */
-    private static function snapshot(int $originalId, PageContent $content, array $metaKeys): int
+    /**
+     * Explicit revision of a page's sections and the given meta; 0 when it could not be stored.
+     * Pinned for a replaced live page, left to the theme's pruning for a draft Claude overwrites.
+     *
+     * @param list<string> $metaKeys
+     */
+    public static function snapshot(int $originalId, PageContent $content, array $metaKeys, bool $pin = true): int
     {
         $original = get_post($originalId);
         $revision = $original ? _wp_put_post_revision($original) : null;
@@ -154,7 +160,9 @@ final class ReplaceOriginal
 
         // update_post_meta() would redirect a revision ID to its parent post, so the generic API.
         update_metadata('post', $revision, self::SNAPSHOT_META, wp_slash(['sections' => $content->stored($originalId), 'meta' => $meta]));
-        update_metadata('post', $revision, self::PIN_META, '1');
+        if ($pin) {
+            update_metadata('post', $revision, self::PIN_META, '1');
+        }
 
         return $revision;
     }
@@ -235,7 +243,7 @@ final class ReplaceOriginal
         View::render('replace', [
             'plan' => $plan,
             'error' => is_string($plan) ? self::errorText($plan) : ($code !== '' ? self::errorText($code) : ''),
-            'nonce' => is_array($plan) ? wp_create_nonce(self::nonceAction($copyId, $plan['modified'])) : '',
+            'nonce' => is_array($plan) ? wp_create_nonce(self::nonceAction($copyId, $plan['modified'], $plan['digest'])) : '',
             'post_url' => admin_url('admin-post.php'),
             'list_url' => admin_url('edit.php?post_type=page'),
         ]);
@@ -308,16 +316,22 @@ final class ReplaceOriginal
         return $removed;
     }
 
-    /** @return list<string> */
+    /**
+     * Hosts of every absolute and scheme-relative link in the rows. Entities are decoded and
+     * backslashes read as slashes, because browsers do both: kses keeps `//host`, `/\host` and
+     * `&#x2F;&#x2F;host`, which all leave the site.
+     *
+     * @return list<string>
+     */
     private static function hosts(mixed $value): array
     {
         $found = [];
         $walk = static function (mixed $item) use (&$walk, &$found): void {
             if (is_array($item)) {
                 array_map($walk, $item);
-            } elseif (is_string($item) && preg_match_all('#https?://[^\s"\'<>)\]]+#i', $item, $m) > 0) {
+            } elseif (is_string($item) && preg_match_all('#(?:https?:[/\\\\]{2}|(?<![\w:/\\\\.\-])[/\\\\]{2})[^\s"\'<>)\]]+#i', html_entity_decode($item, ENT_QUOTES | ENT_HTML5), $m) > 0) {
                 foreach ($m[0] as $url) {
-                    $host = strtolower((string) parse_url($url, PHP_URL_HOST));
+                    $host = strtolower((string) parse_url(str_replace('\\', '/', $url), PHP_URL_HOST));
                     if ($host !== '') {
                         $found[$host] = true;
                     }

@@ -82,7 +82,7 @@ final class TokenStore
         return is_array($row) ? $row : null;
     }
 
-    /** Atomic: exactly one caller gets true for a row. */
+    /** Atomic: exactly one caller gets true for a row, and never for a revoked one. */
     public function consume(int $id): bool
     {
         global $wpdb;
@@ -90,8 +90,19 @@ final class TokenStore
         return $wpdb->update(
             Schema::tokensTable(),
             ['used_at' => $this->now()],
-            ['id' => $id, 'used_at' => null]
+            ['id' => $id, 'used_at' => null, 'revoked_at' => null]
         ) === 1;
+    }
+
+    /** Whether any row of the family was revoked. */
+    public function familyRevoked(string $familyId): bool
+    {
+        global $wpdb;
+
+        return $wpdb->get_row($wpdb->prepare(
+            'SELECT id FROM ' . Schema::tokensTable() . ' WHERE family_id = %s AND revoked_at IS NOT NULL',
+            $familyId
+        ), ARRAY_A) !== null;
     }
 
     /**

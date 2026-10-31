@@ -22,6 +22,14 @@ final class McpPlugin
         SetupPage::register();
         ReplaceOriginal::register();
 
+        // Also while off: a password or role change must revoke tokens that outlive the switch
+        // (the revoke functions skip a site whose tables do not exist).
+        add_action('switch_theme', [Lifecycle::class, 'revokeAll']);
+        add_action('delete_user', [Lifecycle::class, 'revokeUser']);
+        add_action('after_password_reset', [Lifecycle::class, 'onPasswordReset']);
+        add_action('profile_update', [Lifecycle::class, 'onProfileUpdate'], 10, 2);
+        add_action('set_user_role', [Lifecycle::class, 'onRoleChange'], 10, 3);
+
         // Below the published minimum version nothing else is registered: endpoints 404.
         if (!Config::isEnabled() || Updates::belowMinimum()) {
             return;
@@ -30,11 +38,6 @@ final class McpPlugin
         add_action('plugins_loaded', [Schema::class, 'maybeUpgrade']);
         add_action('init', [Pruner::class, 'schedule']);
         add_action(Config::PRUNE_HOOK, [Pruner::class, 'run']);
-
-        add_action('switch_theme', [Lifecycle::class, 'revokeAll']);
-        add_action('delete_user', [Lifecycle::class, 'revokeUser']);
-        add_action('after_password_reset', [Lifecycle::class, 'onPasswordReset']);
-        add_action('profile_update', [Lifecycle::class, 'onProfileUpdate'], 10, 2);
 
         Discovery::register();
         Authorize::register();

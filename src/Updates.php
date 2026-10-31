@@ -19,6 +19,7 @@ final class Updates
 {
     public const REPO = 'https://github.com/raaaf/wp-starter-mcp/';
     public const SLUG = 'wp-starter-mcp';
+    /** Main file as the packager lays it out in the zip. The installed folder may be named differently, see pluginFile(). */
     public const PLUGIN_FILE = 'wp-starter-mcp/wp-starter-mcp.php';
     public const MANIFEST_URL = 'https://raw.githubusercontent.com/raaaf/wp-starter-mcp/main/min-version.json';
     public const MANIFEST_HOOK = 'wpsmcp_manifest';
@@ -43,6 +44,8 @@ final class Updates
     private static ?array $publicKeysOverride = null;
     // @phpstan-ignore property.unusedType
     private static ?\Closure $checkerFactory = null;
+    // @phpstan-ignore property.unusedType
+    private static ?string $fileOverride = null;
 
     public static function register(): void
     {
@@ -84,10 +87,18 @@ final class Updates
         }
     }
 
+    /** Basename of the running plugin file, whatever its folder is called (a zip from GitHub unpacks as wp-starter-mcp-main). */
+    private static function pluginFile(): string
+    {
+        $file = self::$fileOverride ?? (defined('WPSMCP_FILE') ? WPSMCP_FILE : null);
+
+        return $file === null ? self::PLUGIN_FILE : plugin_basename($file);
+    }
+
     /** Forced on for this plugin, and only while the feature is on. Everything else is untouched. */
     public static function autoUpdate(mixed $update, mixed $item): mixed
     {
-        if (is_object($item) && ($item->plugin ?? null) === self::PLUGIN_FILE && Config::isEnabled()) {
+        if (is_object($item) && ($item->plugin ?? null) === self::pluginFile() && Config::isEnabled()) {
             return true;
         }
 
@@ -141,13 +152,15 @@ final class Updates
     /**
      * Before WordPress installs this plugin's package, its `.sha256` and its `.sig` from the same
      * release must both exist and match; a missing or wrong one refuses the update. The checksum
-     * catches a broken download, the signature proves the zip was built by the key holder.
+     * catches a broken download, the signature proves the zip was built by the key holder. The
+     * signature does not cover the version, so the zip's own Version header must also be above the
+     * running one: an old, validly signed release is no update.
      *
      * @param array<string, mixed> $hookExtra
      */
     public static function verifyPackage(mixed $reply, string $package, mixed $upgrader = null, array $hookExtra = []): mixed
     {
-        if (($hookExtra['plugin'] ?? null) !== self::PLUGIN_FILE || $reply !== false) {
+        if (($hookExtra['plugin'] ?? null) !== self::pluginFile() || $reply !== false) {
             return $reply;
         }
 
@@ -156,7 +169,7 @@ final class Updates
             return $file;
         }
 
-        $error = self::checkChecksum($file, $package) ?? self::checkSignature($file, $package);
+        $error = self::checkChecksum($file, $package) ?? self::checkSignature($file, $package) ?? self::checkVersion($file);
         if ($error !== null) {
             @unlink($file);
 
@@ -212,6 +225,26 @@ final class Updates
         }
 
         return new WP_Error('wpsmcp_update_signature_invalid', __('Die Signatur des Updates ist ungültig. Das Update wurde abgebrochen.', 'wp-starter-mcp'));
+    }
+
+    private static function checkVersion(string $file): ?WP_Error
+    {
+        $header = false;
+        if (class_exists(\ZipArchive::class)) {
+            $zip = new \ZipArchive();
+            if ($zip->open($file) === true) {
+                $header = $zip->getFromName(self::PLUGIN_FILE, 8192);
+                $zip->close();
+            }
+        }
+
+        $version = is_string($header) && preg_match('/^[ \t\/*#@]*Version:[ \t]*(\S+)/mi', $header, $m) === 1 ? $m[1] : '';
+
+        if ($version === '' || version_compare($version, self::currentVersion(), '<=')) {
+            return new WP_Error('wpsmcp_update_not_newer', __('Das Paket ist nicht neuer als die installierte Version oder nicht lesbar. Das Update wurde abgebrochen.', 'wp-starter-mcp'));
+        }
+
+        return null;
     }
 
     /** Body of a remote asset, or null when it is missing or unreachable. */

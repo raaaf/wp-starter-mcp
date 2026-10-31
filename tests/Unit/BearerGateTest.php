@@ -18,6 +18,7 @@ final class BearerGateTest extends WpTestCase
     private function request(string $uri, ?string $token): void
     {
         $_SERVER['REQUEST_URI'] = $uri;
+        parse_str((string) parse_url($uri, PHP_URL_QUERY), $_GET);
         if ($token !== null) {
             $_SERVER['HTTP_AUTHORIZATION'] = 'Bearer ' . $token;
         }
@@ -80,6 +81,62 @@ final class BearerGateTest extends WpTestCase
         $this->request('/?rest_route=/wp/v2/users/me', $this->token());
 
         $this->assertFalse(BearerGate::determineUser(false));
+    }
+
+    public function testEmptyRestRouteOnMcpPathDoesNotAuthenticate(): void
+    {
+        // An empty rest_route skips REST, so a page renders with the token's user and no scope check.
+        $this->request('/wp-json/wpsmcp/v1/mcp?rest_route=&page_id=7&preview=true', $this->token());
+
+        $this->assertFalse(BearerGate::determineUser(false));
+        $this->assertNull(BearerGate::authenticationErrors(null));
+    }
+
+    public function testOtherRestRouteOnMcpPathDoesNotAuthenticate(): void
+    {
+        $this->request('/wp-json/wpsmcp/v1/mcp?rest_route=/wp/v2/users/me', $this->token());
+
+        $this->assertFalse(BearerGate::determineUser(false));
+    }
+
+    public function testRestRouteOfThePostBodyCountsToo(): void
+    {
+        $this->request('/wp-json/wpsmcp/v1/mcp', $this->token());
+        $_POST['rest_route'] = '';
+
+        $this->assertFalse(BearerGate::determineUser(false));
+    }
+
+    public function testRestRouteArrayDoesNotAuthenticate(): void
+    {
+        $this->request('/wp-json/wpsmcp/v1/mcp', $this->token());
+        $_GET['rest_route'] = ['/wpsmcp/v1/mcp'];
+
+        $this->assertFalse(BearerGate::determineUser(false));
+    }
+
+    public function testMatchingRestRouteOnMcpPathAuthenticates(): void
+    {
+        $this->request('/wp-json/wpsmcp/v1/mcp?rest_route=/wpsmcp/v1/mcp/', $this->token());
+
+        $this->assertSame(3, BearerGate::determineUser(false));
+    }
+
+    public function testPlainPermalinksNeedTheMcpRestRoute(): void
+    {
+        \WpState::$plainPermalinks = true;
+        $this->request('/index.php?page_id=7&preview=true', $this->token());
+
+        $this->assertFalse(BearerGate::determineUser(false));
+        $this->assertNull(BearerGate::authenticationErrors(null));
+    }
+
+    public function testPlainPermalinksAuthenticateWithTheMcpRestRoute(): void
+    {
+        \WpState::$plainPermalinks = true;
+        $this->request('/index.php?rest_route=/wpsmcp/v1/mcp', $this->token());
+
+        $this->assertSame(3, BearerGate::determineUser(false));
     }
 
     public function testExistingUserIsNotOverridden(): void
