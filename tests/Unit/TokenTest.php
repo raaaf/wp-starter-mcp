@@ -116,6 +116,46 @@ final class TokenTest extends WpTestCase
         $this->assertNull($this->store()->validateAccess((string) $first['body']['access_token']));
     }
 
+    public function testFamilyRevokedWhileIssuingLeavesNoLiveToken(): void
+    {
+        $code = $this->code();
+        $row = $this->store()->find('code', $code);
+        $this->assertIsArray($row);
+        $revoked = false;
+        $GLOBALS['wpdb']->afterInsert = function () use (&$revoked, $row): void {
+            if (!$revoked) {
+                $revoked = true;
+                $this->store()->revokeFamily((string) $row['family_id']);
+            }
+        };
+
+        $reply = $this->token()->process($this->codeGrant($code), '1.2.3.4');
+
+        $this->assertSame('invalid_grant', $reply['body']['error']);
+        $live = array_filter($GLOBALS['wpdb']->tables[\WpStarterMcp\Schema::tokensTable()], static fn (array $r): bool => $r['revoked_at'] === null);
+        $this->assertSame([], $live);
+    }
+
+    public function testReplayedCodeIsLogged(): void
+    {
+        $code = $this->code();
+        $this->token()->process($this->codeGrant($code), '1.2.3.4');
+        $this->token()->process($this->codeGrant($code), '1.2.3.4');
+
+        $this->assertStringContainsString('wpsmcp: code_reuse', (string) file_get_contents($this->log));
+    }
+
+    public function testRevokedCodeIsRefusedWithoutIssuing(): void
+    {
+        $code = $this->code();
+        $row = $this->store()->find('code', $code);
+        $this->assertIsArray($row);
+        $this->store()->revokeFamily((string) $row['family_id']);
+
+        $this->assertSame('invalid_grant', $this->token()->process($this->codeGrant($code), '1.2.3.4')['body']['error']);
+        $this->assertCount(1, $GLOBALS['wpdb']->tables[\WpStarterMcp\Schema::tokensTable()]);
+    }
+
     public function testParallelRedemptionHasOneWinner(): void
     {
         $code = $this->code();

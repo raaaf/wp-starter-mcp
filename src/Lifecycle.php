@@ -9,14 +9,55 @@ use WpStarterMcp\OAuth\TokenStore;
 /** Events after which no connection may survive. */
 final class Lifecycle
 {
-    public static function revokeAll(): void
+    /** The tables exist only after the feature was switched on once, and not after "Delete all data". */
+    private static function installed(): bool
     {
-        TokenStore::make()->revokeAll();
+        return get_option(Schema::OPTION) !== false;
     }
 
+    public static function revokeAll(): void
+    {
+        if (self::installed()) {
+            TokenStore::make()->revokeAll();
+        }
+    }
+
+    /** Tokens belong to a site, the account does not: on a network every site the user belongs to is covered. */
     public static function revokeUser(int $userId): void
     {
-        TokenStore::make()->revokeUser($userId);
+        if (!is_multisite()) {
+            self::revokeUserHere($userId);
+
+            return;
+        }
+
+        $sites = array_map('intval', array_keys(get_blogs_of_user($userId, true)));
+        $sites[] = (int) get_current_blog_id();
+
+        foreach (array_unique($sites) as $siteId) {
+            switch_to_blog($siteId);
+            self::revokeUserHere($userId);
+            restore_current_blog();
+        }
+    }
+
+    private static function revokeUserHere(int $userId): void
+    {
+        if (self::installed()) {
+            TokenStore::make()->revokeUser($userId);
+        }
+    }
+
+    /**
+     * Roles are per site: a user who can no longer edit pages here loses the connections of this site.
+     *
+     * @param list<string> $oldRoles
+     */
+    public static function onRoleChange(int $userId, string $role, array $oldRoles): void
+    {
+        if (!user_can($userId, 'edit_pages')) {
+            self::revokeUserHere($userId);
+        }
     }
 
     /** @param \WP_User|object $user */

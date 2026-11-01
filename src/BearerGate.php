@@ -7,9 +7,9 @@ namespace WpStarterMcp;
 use WpStarterMcp\OAuth\TokenStore;
 
 /**
- * Bearer authentication for the MCP route only. Two gates: the path decides whether a token
- * may authenticate at all, and rest_pre_dispatch refuses any Bearer request whose resolved
- * route is not the MCP route (`?rest_route=` overrides the path).
+ * Bearer authentication for the MCP route only. Two gates: the path and the effective REST
+ * route decide whether a token may authenticate at all, and rest_pre_dispatch refuses any
+ * Bearer request whose resolved route is not the MCP route (`?rest_route=` overrides the path).
  */
 final class BearerGate
 {
@@ -42,6 +42,27 @@ final class BearerGate
     }
 
     /**
+     * Whether this request will be dispatched to the MCP route. A `rest_route` parameter (body
+     * first, then query, as in WP::parse_request) overrides the path; with any other value, empty
+     * included, the request is not REST or not ours, and a token must not authenticate it: an
+     * empty value skips REST and renders a page as the token's user. On plain permalinks the
+     * path is any index.php, so the parameter is required.
+     */
+    private static function isMcpRequest(): bool
+    {
+        if (!self::isMcpPath()) {
+            return false;
+        }
+
+        $param = $_POST['rest_route'] ?? $_GET['rest_route'] ?? null;
+        if ($param === null) {
+            return !str_contains((string) parse_url(Config::mcpUrl(), PHP_URL_QUERY), 'rest_route=');
+        }
+
+        return is_string($param) && untrailingslashit($param) === Config::mcpRoute();
+    }
+
+    /**
      * Runs after application passwords (priority 20). Never before after_setup_theme: rest_url()
      * needs $wp_rewrite, and a user-0 answer would stay cached.
      */
@@ -52,7 +73,7 @@ final class BearerGate
         }
 
         $token = self::bearer();
-        if ($token === null || !self::isMcpPath()) {
+        if ($token === null || !self::isMcpRequest()) {
             return $user;
         }
 
@@ -80,7 +101,7 @@ final class BearerGate
     public static function authenticationErrors(mixed $result): mixed
     {
         $token = self::bearer();
-        if ($result !== null || $token === null || !self::isMcpPath() || Contract::current() === null) {
+        if ($result !== null || $token === null || !self::isMcpRequest() || Contract::current() === null) {
             return $result;
         }
 

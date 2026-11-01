@@ -16,12 +16,18 @@ final class ClientMap
         'https://claude.ai/oauth/mcp-oauth-client-metadata' => [
             'https://claude.ai/api/mcp/auth_callback',
         ],
-        // TODO(step 11): add the Claude Code client ID and its loopback redirect once
-        // recorded from a real run. Do not invent one here.
     ];
+
+    /** Claude Code's published metadata (checked 2026-11-01). It listens on a free local port per run. */
+    private const LOOPBACK_CLIENT = 'https://claude.ai/oauth/claude-code-client-metadata';
+    private const LOOPBACK_REDIRECT = '#^http://(localhost|127\.0\.0\.1)(:(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?/callback$#D';
 
     public static function allows(string $clientId, string $redirectUri): bool
     {
+        if ($clientId === self::LOOPBACK_CLIENT) {
+            return preg_match(self::LOOPBACK_REDIRECT, $redirectUri) === 1;
+        }
+
         return isset(self::CLIENTS[$clientId]) && in_array($redirectUri, self::CLIENTS[$clientId], true);
     }
 

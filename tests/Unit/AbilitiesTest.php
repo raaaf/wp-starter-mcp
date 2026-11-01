@@ -40,6 +40,15 @@ final class AbilitiesTest extends WpTestCase
         $this->assertSame('wpsmcp_scope', Abilities::permit(Abilities::DRAFT, [], null)->get_error_code());
     }
 
+    public function testDraftWithoutGmtDateReportsItsLocalModifiedTimeAsGmt(): void
+    {
+        $draft = (object) ['post_modified' => '2026-11-01 10:59:07', 'post_modified_gmt' => '0000-00-00 00:00:00'];
+        $updated = (object) ['post_modified' => '2026-11-01 10:59:07', 'post_modified_gmt' => '2026-11-01 09:59:00'];
+
+        $this->assertSame('2026-11-01 09:59:07', Abilities::modifiedGmt($draft));
+        $this->assertSame('2026-11-01 09:59:00', Abilities::modifiedGmt($updated));
+    }
+
     public function testTargetPageNeedsEditPostOnIt(): void
     {
         \WpState::$currentCaps = ['edit_pages'];
@@ -93,6 +102,58 @@ final class AbilitiesTest extends WpTestCase
         $this->assertSame([['acf_fc_layout' => 'note', 'text' => 'Hello']], \WpState::$fields[10]);
         $this->assertStringContainsString('action=edit', $result['edit_url']);
         $this->assertStringContainsString('preview=true', $result['preview_url']);
+    }
+
+    private function draftWithSections(): void
+    {
+        \WpState::$posts[10] = (object) ['ID' => 10, 'post_status' => 'draft', 'post_type' => 'page', 'post_title' => 'x', 'post_content' => ''];
+        \WpState::$fields[10] = [['acf_fc_layout' => 'note', 'text' => 'old']];
+    }
+
+    public function testEmptySectionsAreRefusedAndTheDraftKeepsItsContent(): void
+    {
+        $this->draftWithSections();
+
+        $result = Abilities::updateDraftPage(['id' => 10, 'sections' => []]);
+
+        $this->assertSame('wpsmcp_empty_sections', $result->get_error_code());
+        $this->assertSame([['acf_fc_layout' => 'note', 'text' => 'old']], \WpState::$fields[10]);
+        $this->assertArrayNotHasKey(10, \WpState::$revisions);
+    }
+
+    public function testUpdateStoresAnUnpinnedSnapshotOfTheDraftFirst(): void
+    {
+        $this->draftWithSections();
+
+        Abilities::updateDraftPage(['id' => 10, 'sections' => [['acf_fc_layout' => 'note', 'text' => 'new']]]);
+
+        $revision = \WpState::$revisions[10];
+        $this->assertSame([['acf_fc_layout' => 'note', 'text' => 'old']], \WpState::$meta[$revision][\WpStarterMcp\ReplaceOriginal::SNAPSHOT_META]['sections']);
+        $this->assertArrayNotHasKey(\WpStarterMcp\ReplaceOriginal::PIN_META, \WpState::$meta[$revision]);
+        $this->assertSame([['acf_fc_layout' => 'note', 'text' => 'new']], \WpState::$fields[10]);
+
+        \WpStarterMcp\ReplaceOriginal::restore(10, $revision);
+        $this->assertSame([['acf_fc_layout' => 'note', 'text' => 'old']], \WpState::$fields[10]);
+    }
+
+    public function testNothingIsWrittenWhenTheSnapshotFails(): void
+    {
+        $this->draftWithSections();
+        \WpState::$revisionFails = true;
+
+        $result = Abilities::updateDraftPage(['id' => 10, 'sections' => [['acf_fc_layout' => 'note', 'text' => 'new']]]);
+
+        $this->assertSame('wpsmcp_snapshot', $result->get_error_code());
+        $this->assertSame([['acf_fc_layout' => 'note', 'text' => 'old']], \WpState::$fields[10]);
+    }
+
+    public function testOnlyUpdateDraftPageIsAnnotatedDestructive(): void
+    {
+        Abilities::registerAbilities();
+
+        $destructive = array_keys(array_filter(\WpState::$abilities, static fn (array $a): bool => $a['meta']['annotations']['destructive']));
+        $this->assertSame(['wpsmcp/update-draft-page'], $destructive);
+        $this->assertCount(9, \WpState::$abilities);
     }
 
     public function testKeepRowsSurviveAnUpdate(): void

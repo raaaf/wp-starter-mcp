@@ -14,8 +14,12 @@ abstract class WpTestCase extends TestCase
     protected function setUp(): void
     {
         \WpState::reset();
+        // The plugin is installed: its tables exist.
+        \WpState::$options[\WpStarterMcp\Schema::OPTION] = \WpStarterMcp\Schema::VERSION;
         ini_set('error_log', '/dev/null');
         $_SERVER = [];
+        $_GET = [];
+        $_POST = [];
         $this->now = 1_800_000_000;
         \WpStarterMcp\Contract::reset();
         \WpStarterMcp\BearerGate::forgetToken();

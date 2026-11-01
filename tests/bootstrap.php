@@ -34,7 +34,18 @@ final class WpState
     /** @var array<int, bool> */
     public static array $canEdit = [];
     public static string $home = 'https://example.test';
+    /** Plain permalinks: rest_url() answers index.php?rest_route=. */
+    public static bool $plainPermalinks = false;
     public static int $afterSetupTheme = 1;
+    public static bool $revisionFails = false;
+    /** @var array<string, array<string, mixed>> abilities by name */
+    public static array $abilities = [];
+    public static bool $multisite = false;
+    public static int $currentBlog = 1;
+    /** @var list<int> */
+    public static array $blogStack = [];
+    /** @var array<int, list<int>> site ids by user */
+    public static array $blogsOfUser = [];
     public static bool $restUrlCalled = false;
     /** Simulates a user_has_cap / map_meta_cap filter that resolves the current user. */
     public static ?\Closure $onUserCan = null;
@@ -72,7 +83,14 @@ final class WpState
         self::$users = [];
         self::$canEdit = [];
         self::$home = 'https://example.test';
+        self::$plainPermalinks = false;
         self::$afterSetupTheme = 1;
+        self::$revisionFails = false;
+        self::$abilities = [];
+        self::$multisite = false;
+        self::$currentBlog = 1;
+        self::$blogStack = [];
+        self::$blogsOfUser = [];
         self::$restUrlCalled = false;
         self::$onUserCan = null;
         self::$contract = null;
@@ -198,7 +216,36 @@ function delete_user_meta(int $id, string $key): bool
 
 function is_multisite(): bool
 {
-    return false;
+    return WpState::$multisite;
+}
+
+function get_current_blog_id(): int
+{
+    return WpState::$currentBlog;
+}
+
+/** @return array<int, object> */
+function get_blogs_of_user(int $id, bool $all = false): array
+{
+    return array_fill_keys(WpState::$blogsOfUser[$id] ?? [], (object) []);
+}
+
+/** Tables of a site other than the first carry its id in the prefix, as in WordPress. */
+function switch_to_blog(int $id): bool
+{
+    WpState::$blogStack[] = WpState::$currentBlog;
+    WpState::$currentBlog = $id;
+    $GLOBALS['wpdb']->prefix = $id === 1 ? 'wp_' : 'wp_' . $id . '_';
+
+    return true;
+}
+
+function restore_current_blog(): bool
+{
+    WpState::$currentBlog = (int) array_pop(WpState::$blogStack);
+    $GLOBALS['wpdb']->prefix = WpState::$currentBlog === 1 ? 'wp_' : 'wp_' . WpState::$currentBlog . '_';
+
+    return true;
 }
 
 function user_can(int $id, string $cap): bool
@@ -251,7 +298,20 @@ function rest_url(string $path = ''): string
 {
     WpState::$restUrlCalled = true;
 
-    return WpState::$home . '/wp-json/' . $path;
+    return WpState::$plainPermalinks
+        ? WpState::$home . '/index.php?rest_route=/' . ltrim($path, '/')
+        : WpState::$home . '/wp-json/' . $path;
+}
+
+/** @return array{baseurl: string} */
+function wp_get_upload_dir(): array
+{
+    return ['baseurl' => WpState::$home . '/wp-content/uploads'];
+}
+
+function plugin_basename(string $file): string
+{
+    return (string) preg_replace('#^.*/plugins/#', '', $file);
 }
 
 function untrailingslashit(string $value): string
@@ -294,6 +354,10 @@ class wpdb
 {
     public string $prefix = 'wp_';
     public int $insert_id = 0;
+    /** Statements sent, to prove that a missing table is never queried. */
+    public int $queries = 0;
+    /** Called after each insert, to simulate a write from another request. */
+    public ?\Closure $afterInsert = null;
 
     public function get_charset_collate(): string
     {
@@ -309,6 +373,10 @@ class wpdb
         $this->tables[$table] ??= [];
         $this->insert_id = count($this->tables[$table]) + 1;
         $this->tables[$table][$this->insert_id] = ['id' => $this->insert_id, 'used_at' => null, 'revoked_at' => null, 'last_used_at' => null] + $data;
+
+        if ($this->afterInsert !== null) {
+            ($this->afterInsert)();
+        }
 
         return 1;
     }
@@ -332,6 +400,10 @@ class wpdb
                 if ($row[$m[1]] !== null) {
                     return false;
                 }
+            } elseif (preg_match('/^(\w+) IS NOT NULL$/', trim($cond), $m) === 1) {
+                if ($row[$m[1]] === null) {
+                    return false;
+                }
             } elseif (preg_match("/^(\\w+) = '?([^']*)'?$/", trim($cond), $m) === 1) {
                 if ((string) $row[$m[1]] !== $m[2]) {
                     return false;
@@ -351,6 +423,7 @@ class wpdb
     /** @return array<int, array<string, mixed>> */
     public function get_results(string $query, string $output = 'OBJECT'): array
     {
+        $this->queries++;
         preg_match('/FROM (\S+)(?: WHERE (.*))?$/', $query, $m);
         $found = [];
         foreach ($this->tables[$m[1]] ?? [] as $row) {
@@ -370,6 +443,7 @@ class wpdb
 
     public function query(string $query): int|bool
     {
+        $this->queries++;
         if (preg_match('/^DROP TABLE IF EXISTS (\S+)$/', $query, $drop) === 1) {
             unset($this->tables[$drop[1]]);
 
@@ -394,6 +468,7 @@ class wpdb
      */
     public function update(string $table, array $data, array $where): int|false
     {
+        $this->queries++;
         $affected = 0;
         foreach ($this->tables[$table] ?? [] as $id => $row) {
             foreach ($where as $col => $value) {
@@ -446,6 +521,11 @@ function wp_salt(string $scheme = 'auth'): string
     return 'test-salt';
 }
 
+function get_gmt_from_date(string $date): string
+{
+    return gmdate('Y-m-d H:i:s', strtotime($date . ' +0100'));
+}
+
 function get_post(int $id): ?object
 {
     return WpState::$posts[$id] ?? null;
@@ -464,7 +544,7 @@ function term_exists(int $term, string $taxonomy): bool
 /** @return array<string, array<string, bool>> */
 function wp_kses_allowed_html(string $context): array
 {
-    return ['p' => [], 'a' => ['href' => true], 'strong' => [], 'form' => [], 'input' => [], 'script' => [], 'iframe' => []];
+    return ['p' => [], 'a' => ['href' => true], 'strong' => [], 'img' => [], 'video' => [], 'audio' => [], 'form' => [], 'input' => [], 'script' => [], 'iframe' => []];
 }
 
 /**
@@ -648,14 +728,23 @@ function wp_trash_post(int $id): void
     WpState::$posts[$id]->post_status = 'trash';
 }
 
-/** @return int */
-function _wp_put_post_revision(object $post): int
+function _wp_put_post_revision(object $post): ?int
 {
+    if (WpState::$revisionFails) {
+        return null;
+    }
+
     $id = WpState::$nextPostId++;
-    WpState::$posts[$id] = (object) ['ID' => $id, 'post_type' => 'revision', 'post_parent' => $post->ID, 'post_title' => $post->post_title, 'post_content' => $post->post_content, 'post_status' => 'inherit'];
+    WpState::$posts[$id] = (object) ['ID' => $id, 'post_type' => 'revision', 'post_parent' => $post->ID, 'post_title' => $post->post_title ?? '', 'post_content' => $post->post_content ?? '', 'post_status' => 'inherit'];
     WpState::$revisions[$post->ID] = $id;
 
     return $id;
+}
+
+/** @param array<string, mixed> $args */
+function wp_register_ability(string $name, array $args): void
+{
+    WpState::$abilities[$name] = $args;
 }
 
 /** @return list<int> */

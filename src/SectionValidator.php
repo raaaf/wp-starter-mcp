@@ -244,7 +244,70 @@ final class SectionValidator
 
         $clean = self::cleanHtml($value);
 
+        if (self::usesCssUrl($clean)) {
+            return $this->reject($path . ' must not use CSS url().');
+        }
+        if (self::hasForeignMedia($clean)) {
+            return $this->reject($path . ' may only load images, video and audio from this site\'s media library.');
+        }
+
         return trim($clean) === '' ? null : $clean;
+    }
+
+    /** Style attributes with url(), image-set(), @import or a CSS escape (kses decodes entities before it checks them, so do the same). */
+    private static function usesCssUrl(string $html): bool
+    {
+        if (preg_match_all('/\sstyle\s*=\s*(?:"([^"]*)"|\'([^\']*)\')/i', $html, $m) === 0) {
+            return false;
+        }
+
+        foreach (array_merge($m[1], $m[2]) as $style) {
+            if (preg_match('/url\s*\(|image-set|@import|\\\\/i', html_entity_decode($style, ENT_QUOTES | ENT_HTML5)) === 1) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** Any src, srcset or poster that does not point into this site's uploads. */
+    private static function hasForeignMedia(string $html): bool
+    {
+        if (preg_match_all('/\s(src|srcset|poster)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>"\']+))/i', $html, $m, PREG_SET_ORDER) === 0) {
+            return false;
+        }
+
+        foreach ($m as $match) {
+            $value = html_entity_decode(($match[2] ?? '') . ($match[3] ?? '') . ($match[4] ?? ''), ENT_QUOTES | ENT_HTML5);
+            $urls = strtolower($match[1]) === 'srcset'
+                ? array_map(static fn (string $candidate): string => (string) strtok(trim($candidate), " \t\n"), explode(',', $value))
+                : [trim($value)];
+
+            foreach ($urls as $url) {
+                if (!self::isUploadsUrl($url)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static function isUploadsUrl(string $url): bool
+    {
+        $base = strtolower(untrailingslashit(wp_get_upload_dir()['baseurl']));
+        $origin = (string) preg_replace('#^(https?://[^/]+).*$#', '$1', $base);
+        $url = strtolower($url);
+
+        if (str_starts_with($url, '//')) {
+            $url = (string) parse_url($base, PHP_URL_SCHEME) . ':' . $url;
+        } elseif (str_starts_with($url, '/')) {
+            $url = $origin . $url;
+        }
+
+        return $base !== ''
+            && str_starts_with($url, $base . '/')
+            && preg_match('#(^|/)(\.|%2e){2}(/|$)|[\\\\\s@]#', substr($url, strlen($base))) === 0;
     }
 
     /**
@@ -262,9 +325,19 @@ final class SectionValidator
         return self::stripShortcodes($html);
     }
 
+    /**
+     * Removes every shortcode tag except [icon], until nothing changes: removing one can join the
+     * pieces of another. WordPress takes a registered name followed by anything that is not a word
+     * character or hyphen (`[name/ a=1]`, `[name=1]`, `[name.x]`), up to the closing bracket.
+     */
     public static function stripShortcodes(string $text): string
     {
-        return (string) preg_replace('/\[\/?(?!icon\b)[A-Za-z_][\w-]*(?:\s[^\]]*)?\]/', '', $text);
+        do {
+            $before = $text;
+            $text = (string) preg_replace('/\[\/?(?!icon(?![\w-]))[A-Za-z_][^\]]*\]/', '', $text);
+        } while ($text !== $before);
+
+        return $text;
     }
 
     private function email(mixed $value, string $path): ?string
