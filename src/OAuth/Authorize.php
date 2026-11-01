@@ -6,6 +6,7 @@ namespace WpStarterMcp\OAuth;
 
 use WpStarterMcp\Audit;
 use WpStarterMcp\Config;
+use WpStarterMcp\Contract;
 use WpStarterMcp\Intent;
 use WpStarterMcp\Logger;
 
@@ -31,6 +32,10 @@ final class Authorize
 
     public static function handle(): void
     {
+        if (Contract::current() === null) {
+            return;
+        }
+
         $uri = isset($_SERVER['REQUEST_URI']) && is_string($_SERVER['REQUEST_URI']) ? $_SERVER['REQUEST_URI'] : '';
         $path = rtrim((string) parse_url($uri, PHP_URL_PATH), '/');
 

@@ -31,6 +31,18 @@ final class WpState
     public static bool $restUrlCalled = false;
     /** Simulates a user_has_cap / map_meta_cap filter that resolves the current user. */
     public static ?\Closure $onUserCan = null;
+    public static mixed $contract = null;
+    /** @var array<int, mixed> ACF field values by post */
+    public static array $fields = [];
+    /** @var array<int, array<string, mixed>> post meta by post */
+    public static array $meta = [];
+    public static int $nextPostId = 100;
+    /** @var array<int, object> */
+    public static array $posts = [];
+    /** @var list<string> capabilities of the current user */
+    public static array $currentCaps = ['edit_pages', 'edit_post'];
+    /** @var list<array{string, array<string, mixed>}> */
+    public static array $ksesCalls = [];
     /** @var list<string> */
     public static array $clearedCron = [];
 
@@ -47,6 +59,13 @@ final class WpState
         self::$afterSetupTheme = 1;
         self::$restUrlCalled = false;
         self::$onUserCan = null;
+        self::$contract = null;
+        self::$fields = [];
+        self::$meta = [];
+        self::$nextPostId = 100;
+        self::$posts = [];
+        self::$currentCaps = ['edit_pages', 'edit_post'];
+        self::$ksesCalls = [];
         self::$clearedCron = [];
         $GLOBALS['wpdb'] = new wpdb();
     }
@@ -56,6 +75,16 @@ class WP_Error
 {
     public function __construct(public string $code = '', public string $message = '', public mixed $data = null)
     {
+    }
+
+    public function get_error_code(): string
+    {
+        return $this->code;
+    }
+
+    public function get_error_message(): string
+    {
+        return $this->message;
     }
 }
 
@@ -349,3 +378,179 @@ class wpdb
 }
 
 $GLOBALS['wpdb'] = new wpdb();
+
+function apply_filters(string $hook, mixed $value, mixed ...$args): mixed
+{
+    return $hook === 'wp_starter_mcp_contract' ? WpState::$contract : $value;
+}
+
+function current_user_can(string $cap, mixed ...$args): bool
+{
+    return in_array($cap, WpState::$currentCaps, true);
+}
+
+function get_current_user_id(): int
+{
+    return 3;
+}
+
+function wp_strip_all_tags(string $text): string
+{
+    return strip_tags($text);
+}
+
+function sanitize_text_field(string $text): string
+{
+    return trim(preg_replace('/\s+/', ' ', strip_tags($text)) ?? '');
+}
+
+function sanitize_textarea_field(string $text): string
+{
+    return trim(strip_tags($text));
+}
+
+function wp_salt(string $scheme = 'auth'): string
+{
+    return 'test-salt';
+}
+
+function get_post(int $id): ?object
+{
+    return WpState::$posts[$id] ?? null;
+}
+
+function get_attached_file(int $id): string
+{
+    return (string) (WpState::$posts[$id]->file ?? '');
+}
+
+function term_exists(int $term, string $taxonomy): bool
+{
+    return $term === 7 && $taxonomy === 'category';
+}
+
+/** @return array<string, array<string, bool>> */
+function wp_kses_allowed_html(string $context): array
+{
+    return ['p' => [], 'a' => ['href' => true], 'strong' => [], 'form' => [], 'input' => [], 'script' => [], 'iframe' => []];
+}
+
+/**
+ * Stand-in for kses: drops tags that are not on the allowlist and records the call. The real
+ * filter is exercised on a WordPress site, the unit tests pin which allowlist the plugin passes.
+ *
+ * @param array<string, array<string, bool>> $allowed
+ * @param list<string> $protocols
+ */
+function wp_kses(string $html, array $allowed, array $protocols = []): string
+{
+    WpState::$ksesCalls[] = [$html, $allowed];
+
+    return (string) preg_replace_callback('#</?([a-z0-9]+)[^>]*>#i', static fn (array $m): string => isset($allowed[strtolower($m[1])]) ? $m[0] : '', $html);
+}
+
+function is_email(string $email): string|false
+{
+    return filter_var($email, FILTER_VALIDATE_EMAIL) !== false ? $email : false;
+}
+
+function is_wp_error(mixed $thing): bool
+{
+    return $thing instanceof WP_Error;
+}
+
+function get_field(string $selector, int $postId, bool $format = true): mixed
+{
+    return WpState::$fields[$postId] ?? false;
+}
+
+function update_field(string $selector, mixed $value, int $postId): bool
+{
+    WpState::$fields[$postId] = $value;
+
+    return true;
+}
+
+function get_post_meta(int $id, string $key, bool $single = false): mixed
+{
+    return WpState::$meta[$id][$key] ?? '';
+}
+
+function wpsmcp_test_unslash(mixed $value): mixed
+{
+    if (is_array($value)) {
+        return array_map('wpsmcp_test_unslash', $value);
+    }
+
+    return is_string($value) ? stripslashes($value) : $value;
+}
+
+function wp_slash(mixed $value): mixed
+{
+    if (is_array($value)) {
+        return array_map('wp_slash', $value);
+    }
+
+    return is_string($value) ? addslashes($value) : $value;
+}
+
+function update_post_meta(int $id, string $key, mixed $value): bool
+{
+    // WordPress unslashes meta values on save.
+    WpState::$meta[$id][$key] = wpsmcp_test_unslash($value);
+
+    return true;
+}
+
+/** @param array<string, mixed> $args */
+function wp_insert_post(array $args, bool $wpError = false): int
+{
+    $id = WpState::$nextPostId++;
+    // WordPress unslashes post fields on save.
+    $args = wpsmcp_test_unslash($args);
+    WpState::$posts[$id] = (object) ($args + ['ID' => $id, 'post_content' => '', 'post_modified_gmt' => '']);
+    WpState::$posts[$id]->ID = $id;
+
+    return $id;
+}
+
+/** @param array<string, mixed> $args */
+function wp_update_post(array $args): int
+{
+    foreach (wpsmcp_test_unslash($args) as $key => $value) {
+        WpState::$posts[(int) $args['ID']]->$key = $value;
+    }
+
+    return (int) $args['ID'];
+}
+
+function get_edit_post_link(int $id, string $context = 'display'): string
+{
+    return "https://example.test/wp-admin/post.php?post={$id}&action=edit";
+}
+
+function get_preview_post_link(int $id): string
+{
+    return "https://example.test/?p={$id}&preview=true";
+}
+
+/** @return array<string, mixed> */
+function acf_get_field(string $selector): array
+{
+    return ['key' => $selector, 'type' => 'flexible_content'];
+}
+
+function acf_validate_value(mixed $value, array $field, string $input): bool
+{
+    return true;
+}
+
+function acf_reset_validation_errors(): void
+{
+}
+
+/** @return array<int, array<string, mixed>> */
+function acf_get_validation_errors(): array
+{
+    return [];
+}

@@ -35,6 +35,7 @@ final class McpPlugin
         Authorize::register();
         Token::register();
         BearerGate::register();
+        Abilities::register();
         Server::register();
     }
 }

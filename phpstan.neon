@@ -3,6 +3,8 @@ includes:
 
 parameters:
     level: 8
+    bootstrapFiles:
+        - stubs/acf.php
     paths:
         - src
         - wp-starter-mcp.php

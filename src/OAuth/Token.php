@@ -6,6 +6,7 @@ namespace WpStarterMcp\OAuth;
 
 use WpStarterMcp\Audit;
 use WpStarterMcp\Config;
+use WpStarterMcp\Contract;
 use WpStarterMcp\Logger;
 use WpStarterMcp\RateLimiter;
 
@@ -32,7 +33,11 @@ final class Token
             register_rest_route(Config::ROUTE_NAMESPACE, '/' . Config::ROUTE_TOKEN, [
                 'methods' => 'POST',
                 'permission_callback' => '__return_true',
-                'callback' => static function (\WP_REST_Request $request): \WP_REST_Response {
+                'callback' => static function (\WP_REST_Request $request): \WP_REST_Response|\WP_Error {
+                    if (Contract::current() === null) {
+                        return new \WP_Error('rest_no_route', 'No route was found matching the URL and request method.', ['status' => 404]);
+                    }
+
                     $ip = isset($_SERVER['REMOTE_ADDR']) && is_string($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : '';
                     $reply = (new self(TokenStore::make(), new RateLimiter()))->process($request->get_body_params(), $ip);
                     $response = new \WP_REST_Response($reply['body'], $reply['status']);
