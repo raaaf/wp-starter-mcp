@@ -243,7 +243,11 @@ final class Abilities
         return ['pages' => $pages, 'page' => max(1, (int) ($input['page'] ?? 1)), 'total_pages' => (int) $query->max_num_pages];
     }
 
-    /** WordPress leaves post_modified_gmt zero on a draft until its first update. */
+    /**
+     * WordPress leaves post_modified_gmt zero on a draft until its first update.
+     *
+     * @param object{post_modified: string, post_modified_gmt: string} $post
+     */
     public static function modifiedGmt(object $post): string
     {
         return $post->post_modified_gmt === '0000-00-00 00:00:00'
