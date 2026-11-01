@@ -521,6 +521,11 @@ function wp_salt(string $scheme = 'auth'): string
     return 'test-salt';
 }
 
+function get_gmt_from_date(string $date): string
+{
+    return gmdate('Y-m-d H:i:s', strtotime($date . ' +0100'));
+}
+
 function get_post(int $id): ?object
 {
     return WpState::$posts[$id] ?? null;

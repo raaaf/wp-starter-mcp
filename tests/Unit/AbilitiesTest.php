@@ -40,6 +40,15 @@ final class AbilitiesTest extends WpTestCase
         $this->assertSame('wpsmcp_scope', Abilities::permit(Abilities::DRAFT, [], null)->get_error_code());
     }
 
+    public function testDraftWithoutGmtDateReportsItsLocalModifiedTimeAsGmt(): void
+    {
+        $draft = (object) ['post_modified' => '2026-11-01 10:59:07', 'post_modified_gmt' => '0000-00-00 00:00:00'];
+        $updated = (object) ['post_modified' => '2026-11-01 10:59:07', 'post_modified_gmt' => '2026-11-01 09:59:00'];
+
+        $this->assertSame('2026-11-01 09:59:07', Abilities::modifiedGmt($draft));
+        $this->assertSame('2026-11-01 09:59:00', Abilities::modifiedGmt($updated));
+    }
+
     public function testTargetPageNeedsEditPostOnIt(): void
     {
         \WpState::$currentCaps = ['edit_pages'];

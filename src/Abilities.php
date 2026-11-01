@@ -243,6 +243,14 @@ final class Abilities
         return ['pages' => $pages, 'page' => max(1, (int) ($input['page'] ?? 1)), 'total_pages' => (int) $query->max_num_pages];
     }
 
+    /** WordPress leaves post_modified_gmt zero on a draft until its first update. */
+    public static function modifiedGmt(object $post): string
+    {
+        return $post->post_modified_gmt === '0000-00-00 00:00:00'
+            ? get_gmt_from_date($post->post_modified)
+            : $post->post_modified_gmt;
+    }
+
     /** @return array<string, mixed> */
     private static function summarise(int $id): array
     {
@@ -252,7 +260,7 @@ final class Abilities
             'id' => $id,
             'title' => $post ? get_the_title($post) : '',
             'status' => $post ? $post->post_status : '',
-            'modified' => $post ? $post->post_modified_gmt : '',
+            'modified' => $post ? self::modifiedGmt($post) : '',
             'url' => get_permalink($id),
         ];
     }
