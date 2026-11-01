@@ -168,4 +168,14 @@ final class ReplaceOriginalTest extends WpTestCase
         $this->assertFalse(ReplaceOriginal::blockPinnedDelete(null, $pinned));
         $this->assertNull(ReplaceOriginal::blockPinnedDelete(null, $plain));
     }
+
+    public function testReplaceKeepsTheOriginalTitleWhateverTheCopyIsCalled(): void
+    {
+        \WpState::$posts[11]->post_title = 'Leistungen (Draft)';
+
+        $plan = ReplaceOriginal::plan(11);
+        ReplaceOriginal::execute(11, wp_create_nonce(ReplaceOriginal::nonceAction(11, $plan['modified'], $plan['digest'])));
+
+        $this->assertSame('Leistungen', \WpState::$posts[10]->post_title);
+    }
 }

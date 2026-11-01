@@ -119,8 +119,8 @@ final class ReplaceOriginal
         // update_field before wp_update_post, as the plan fixes.
         update_field($contract->pageFieldKey(), $content->stored($copyId), $plan['original']);
 
-        $title = (string) $copy->post_title === sprintf('%s (Kopie)', $original->post_title) ? (string) $original->post_title : (string) $copy->post_title;
-        wp_update_post(wp_slash(['ID' => $plan['original'], 'post_title' => $title, 'post_content' => $copy->post_content]));
+        // The title stays: a copy's working title such as "Home (Draft)" must not rename the live page.
+        wp_update_post(wp_slash(['ID' => $plan['original'], 'post_content' => $copy->post_content]));
 
         foreach ($metaKeys as $key) {
             $value = get_post_meta($copyId, $key, true);
