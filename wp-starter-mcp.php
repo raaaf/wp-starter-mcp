@@ -3,7 +3,7 @@
 /**
  * Plugin Name:       WP Starter MCP
  * Description:       Connect Claude to this site via MCP with an OAuth sign-in. Draft-only. Off until an administrator switches it on.
- * Version:           0.1.0
+ * Version:           1.0.0
  * Requires at least: 6.9
  * Requires PHP:      8.3
  * Requires Plugins:  mcp-adapter
@@ -19,7 +19,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-const WPSMCP_VERSION = '0.1.0';
+const WPSMCP_VERSION = '1.0.0';
 const WPSMCP_FILE = __FILE__;
 
 $wpsmcpAutoload = __DIR__ . '/vendor/autoload.php';
