@@ -9,6 +9,13 @@ require_once dirname(__DIR__) . '/vendor/autoload.php';
 define('ABSPATH', sys_get_temp_dir() . '/wpsmcp-fake-wp/');
 define('ARRAY_A', 'ARRAY_A');
 
+// Schema::install() requires WordPress's upgrade.php for dbDelta; the tests only need the call to exist.
+if (!is_dir(ABSPATH . 'wp-admin/includes')) {
+    mkdir(ABSPATH . 'wp-admin/includes', 0777, true);
+}
+file_put_contents(ABSPATH . 'wp-admin/includes/upgrade.php', "<?php\nfunction dbDelta(string \$sql): array\n{\n    return [];\n}\n");
+define('WPSMCP_VERSION', '1.0.0');
+
 /** Per-test state, reset by WpTestCase. */
 final class WpState
 {
@@ -45,6 +52,15 @@ final class WpState
     public static array $ksesCalls = [];
     /** @var list<string> */
     public static array $clearedCron = [];
+    /** @var array<string, array{int, string}|WP_Error> remote GET answers by URL; absent means unreachable */
+    public static array $remote = [];
+    /** @var list<string> every URL fetched */
+    public static array $fetched = [];
+    public static string $downloadBody = '';
+    /** @var list<string> */
+    public static array $scheduled = [];
+    /** @var array<int, int> revision ids by post */
+    public static array $revisions = [];
 
     public static function reset(): void
     {
@@ -67,6 +83,11 @@ final class WpState
         self::$currentCaps = ['edit_pages', 'edit_post'];
         self::$ksesCalls = [];
         self::$clearedCron = [];
+        self::$remote = [];
+        self::$fetched = [];
+        self::$downloadBody = '';
+        self::$scheduled = [];
+        self::$revisions = [];
         $GLOBALS['wpdb'] = new wpdb();
     }
 }
@@ -274,6 +295,11 @@ class wpdb
     public string $prefix = 'wp_';
     public int $insert_id = 0;
 
+    public function get_charset_collate(): string
+    {
+        return '';
+    }
+
     /** @var array<string, array<int, array<string, mixed>>> */
     public array $tables = [];
 
@@ -344,6 +370,12 @@ class wpdb
 
     public function query(string $query): int|bool
     {
+        if (preg_match('/^DROP TABLE IF EXISTS (\S+)$/', $query, $drop) === 1) {
+            unset($this->tables[$drop[1]]);
+
+            return true;
+        }
+
         preg_match('/^DELETE FROM (\S+) WHERE (.*)$/', $query, $m);
         $count = 0;
         foreach ($this->tables[$m[1]] ?? [] as $id => $row) {
@@ -553,4 +585,129 @@ function acf_reset_validation_errors(): void
 function acf_get_validation_errors(): array
 {
     return [];
+}
+
+function get_user_by(string $field, string $value): object|false
+{
+    foreach (WpState::$users as $user) {
+        if ($user->user_email === $value) {
+            return $user;
+        }
+    }
+
+    return false;
+}
+
+function delete_option(string $name): bool
+{
+    unset(WpState::$options[$name]);
+
+    return true;
+}
+
+function update_metadata(string $type, int $id, string $key, mixed $value): bool
+{
+    WpState::$meta[$id][$key] = wpsmcp_test_unslash($value);
+
+    return true;
+}
+
+function delete_metadata(string $type, int $objectId, string $key, mixed $value = '', bool $all = false): bool
+{
+    if ($type === 'post') {
+        unset(WpState::$meta[$objectId][$key]);
+
+        return true;
+    }
+
+    foreach (WpState::$userMeta as $id => $_) {
+        unset(WpState::$userMeta[$id][$key]);
+    }
+
+    return true;
+}
+
+function delete_post_meta_by_key(string $key): bool
+{
+    foreach (WpState::$meta as $id => $_) {
+        unset(WpState::$meta[$id][$key]);
+    }
+
+    return true;
+}
+
+function delete_post_meta(int $id, string $key): bool
+{
+    unset(WpState::$meta[$id][$key]);
+
+    return true;
+}
+
+function wp_trash_post(int $id): void
+{
+    WpState::$posts[$id]->post_status = 'trash';
+}
+
+/** @return int */
+function _wp_put_post_revision(object $post): int
+{
+    $id = WpState::$nextPostId++;
+    WpState::$posts[$id] = (object) ['ID' => $id, 'post_type' => 'revision', 'post_parent' => $post->ID, 'post_title' => $post->post_title, 'post_content' => $post->post_content, 'post_status' => 'inherit'];
+    WpState::$revisions[$post->ID] = $id;
+
+    return $id;
+}
+
+/** @return list<int> */
+function wp_get_post_revisions(int $id, array $args = []): array
+{
+    return isset(WpState::$revisions[$id]) ? [WpState::$revisions[$id]] : [];
+}
+
+function get_permalink(int $id): string
+{
+    return "https://example.test/?page_id={$id}";
+}
+
+function wp_create_nonce(string $action): string
+{
+    return 'nonce-' . $action;
+}
+
+function download_url(string $url): string|WP_Error
+{
+    $file = tempnam(sys_get_temp_dir(), 'wpsmcp');
+    file_put_contents($file, WpState::$downloadBody);
+
+    return $file;
+}
+
+/** @return array{int, string}|WP_Error */
+function wp_remote_get(string $url, array $args = []): array|WP_Error
+{
+    WpState::$fetched[] = $url;
+
+    return WpState::$remote[$url] ?? new WP_Error('http_request_failed', 'unreachable');
+}
+
+function wp_remote_retrieve_response_code(array $response): int
+{
+    return $response[0];
+}
+
+function wp_remote_retrieve_body(array $response): string
+{
+    return $response[1];
+}
+
+function wp_next_scheduled(string $hook): int|false
+{
+    return in_array($hook, WpState::$scheduled, true) ? 1 : false;
+}
+
+function wp_schedule_event(int $time, string $recurrence, string $hook): bool
+{
+    WpState::$scheduled[] = $hook;
+
+    return true;
 }

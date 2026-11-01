@@ -20,6 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 const WPSMCP_VERSION = '0.1.0';
+const WPSMCP_FILE = __FILE__;
 
 $wpsmcpAutoload = __DIR__ . '/vendor/autoload.php';
 

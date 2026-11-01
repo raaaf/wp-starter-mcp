@@ -26,7 +26,7 @@ final class LifecycleTest extends WpTestCase
 
         $this->assertNull($store->validateAccess($token));
         $this->assertSame('0', \WpState::$options['wpsmcp_enabled']);
-        $this->assertSame(['wpsmcp_prune'], \WpState::$clearedCron);
+        $this->assertSame(['wpsmcp_prune', 'wpsmcp_manifest'], \WpState::$clearedCron);
     }
 
     public function testReactivationRevivesNoToken(): void

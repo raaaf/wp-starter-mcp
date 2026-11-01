@@ -16,7 +16,7 @@ if (preg_match('/^ \* Version:\s+(\S+)/m', $main, $m) !== 1) {
 $version = $m[1];
 $stage = sys_get_temp_dir() . '/wpsmcp-build-' . bin2hex(random_bytes(4));
 $pluginDir = $stage . '/wp-starter-mcp';
-$include = ['wp-starter-mcp.php', 'composer.json', 'composer.lock', 'src', 'README.md'];
+$include = ['wp-starter-mcp.php', 'uninstall.php', 'composer.json', 'composer.lock', 'src', 'views', 'README.md'];
 
 $copy = static function (string $from, string $to) use (&$copy): void {
     if (is_dir($from)) {
@@ -74,3 +74,9 @@ file_put_contents($zipPath . '.sha256', $sum . '  ' . basename($zipPath) . "\n")
 
 exec('rm -rf ' . escapeshellarg($stage));
 echo basename($zipPath) . "\n" . $sum . "\n";
+
+// Signature slot: the private key lives on the maintainer's machine, never here or in CI.
+// The release needs three assets: the zip, the .sha256 and the .sig.
+echo "Next, on the machine that holds the key:\n"
+    . '  php scripts/release-signing.php sign ' . $zipPath . " <private-key-file>\n"
+    . '  gh release upload v' . $version . ' ' . $zipPath . '.sig' . "\n";
