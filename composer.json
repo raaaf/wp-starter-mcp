@@ -1,0 +1,35 @@
+{
+    "name": "rafael/wp-starter-mcp",
+    "description": "WordPress plugin: connect Claude to wp-starter sites via MCP with an OAuth 2.1 server (draft-only).",
+    "type": "wordpress-plugin",
+    "license": "GPL-2.0-or-later",
+    "require": {
+        "php": ">=8.3"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^13",
+        "phpstan/phpstan": "^2",
+        "szepeviktor/phpstan-wordpress": "^2"
+    },
+    "autoload": {
+        "psr-4": {
+            "WpStarterMcp\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "WpStarterMcp\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "phpunit",
+        "lint": "phpstan analyse --memory-limit=1G",
+        "package": "@php scripts/package.php"
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "phpstan/extension-installer": true
+        }
+    }
+}
