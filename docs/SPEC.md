@@ -1,6 +1,6 @@
 # Specification
 
-Plugin version 0.1.0, theme contract version 1, schema version 1. Namespace `WpStarterMcp`, prefix `wpsmcp_`.
+Plugin version 1.0.0, theme contract version 1, schema version 1. Namespace `WpStarterMcp`, prefix `wpsmcp_`.
 
 ## State
 
